@@ -24,9 +24,9 @@ typedef struct{
 	uint64_t* true_addresses; /*For each cache line, keep a true address.*/
 	uint8_t* cachelines; /*cached lines*/
 	uint32_t (*mread)(uint64_t addr, uint8_t* data, uint32_t* rid_passthrough, uint64_t* master_cyclecounter); /*THIS IS A CACHELINE ADDRESS!!! NOT A BYTE ADDRESS!!!*/
-	uint32_t (*mwrite)(uint64_t addr, uint8_t* data, uint32_t* rid_passthrough); /*THIS IS A CACHELINE ADDRESS!!! NOT A BYTE ADDRESS!!!*/
-	uint32_t (*mstat_read)(uint16_t reqid); /*Check the status of a read request*/
-	uint32_t (*mstat_write)(uint16_t reqid); /*Check the status of a write request*/
+	uint32_t (*mwrite)(uint64_t addr, uint8_t* data, uint32_t* rid_passthrough, uint64_t* master_cyclecounter); /*THIS IS A CACHELINE ADDRESS!!! NOT A BYTE ADDRESS!!!*/
+	uint32_t (*mstat_read)(uint32_t reqid, uint64_t* master_cyclecounter); /*Check the status of a read request*/
+	uint32_t (*mstat_write)(uint32_t reqid, uint64_t* master_cyclecounter); /*Check the status of a write request*/
 	/*CACHE QUEUE. Operations the cache must complete, in order.*/
 	queue_entry todo_queue[65536]; 
 	uint64_t nqueue_requests;
@@ -40,7 +40,8 @@ typedef struct{
 	uint64_t cache_time_decode; /*how many subcycles does the cache have to spend to decode an address into a cache line ID?*/
 	uint64_t cache_time_idle; /*how many subcycles does it take to execute an idle?*/
 	uint64_t cache_time_populate_step; /*how many subcycles does it take to do a populate step?*/
-	uint64_t cache_time_
+	uint64_t cache_time_wait_on_read; /*How long does it take to check a read?*/
+	uint64_t cache_time_populate_start;
 	/*Cache size information*/
 	uint16_t ncachelines;
 	uint32_t cacheline_sz;
@@ -75,30 +76,32 @@ enum{
 /*return value from cache requests*/
 enum{
 	CACHE_QUEUE_FULL=0, /*queue is full, cannot handle request. Must repeat request after a cycle.*/
-	CACHE_REQUEST_QUEUED, /*request was queued.*/
-	CACHE_REQUEST_HANDLED /*the request was immediately served.*/
+	CACHE_REQUEST_QUEUED=1, /*request was queued.*/
+	CACHE_REQUEST_HANDLED=2 /*the request was immediately served.*/
 };
 
 /*return value from mread or write*/
 enum{
 	MEM_QUEUE_FULL = 0, /*memory request queue is full, cannot handle it*/
-	MEM_REQUEST_QUEUED,
-	MEM_REQUEST_HANDLED
+	MEM_REQUEST_QUEUED=1,
+	MEM_REQUEST_HANDLED=2
 };
 
 static inline cachedef cache_init(
 	uint8_t cacheline_sz_pow2,
 	uint32_t ncachelines,
 	uint64_t queue_size,
-	uint32_t(*mread)(uint64_t addr, uint8_t* data, uint32_t* rid_passthrough), /*addr is addressed by cache line size.*/
-	uint32_t(*mwrite)(uint64_t addr, uint8_t* data, uint32_t* rid_passthrough), /*Always writes cacheline_sz_pow2 bytes.*/
-	uint32_t (*mstat_read)(uint16_t reqid), /*Check the status of a read request*/
-	uint32_t (*mstat_write)(uint16_t reqid), /*Check the status of a write request*/
+	uint32_t(*mread)(uint64_t addr, uint8_t* data, uint32_t* rid_passthrough, uint64_t* master_cyclecounter), /*addr is addressed by cache line size.*/
+	uint32_t(*mwrite)(uint64_t addr, uint8_t* data, uint32_t* rid_passthrough, uint64_t* master_cyclecounter), /*Always writes cacheline_sz_pow2 bytes.*/
+	uint32_t (*mstat_read)(uint32_t reqid, uint64_t* master_cyclecounter), /*Check the status of a read request*/
+	uint32_t (*mstat_write)(uint32_t reqid, uint64_t* master_cyclecounter), /*Check the status of a write request*/
 	uint64_t cache_time_write, /*how many subcycles does the cache have to spend in order to write into one of its entries?*/
 	uint64_t cache_time_read, /*how many subcycles does the cache have to spend in order to read one of its entries?*/
 	uint64_t cache_time_decode, /*how many subcycles does the cache have to spend to decode an address into a cache line ID?*/
 	uint64_t cache_time_idle,
-	uint64_t cache_time_populate_step
+	uint64_t cache_time_populate_step,
+	uint64_t cache_time_wait_on_read,
+	uint64_t cache_time_populate_start
 ){
 	cachedef c = {0};
 	c.cacheline_sz = (((uint32_t)1)<<(uint32_t)cacheline_sz_pow2);
@@ -111,6 +114,8 @@ static inline cachedef cache_init(
 	c.cache_time_decode = cache_time_decode;
 	c.cache_time_idle = cache_time_idle;
 	c.cache_time_populate_step = cache_time_populate_step;
+	c.cache_time_wait_on_read = cache_time_wait_on_read;
+	c.cache_time_populate_start = cache_time_populate_start;
 	c.current_state_consumed_cycles = 0;
 	c.nqueue_requests = 0; /*At population time, there are no queued requests.*/
 	c.current_state_consumed_cycles = 0;
@@ -136,6 +141,9 @@ static inline cachedef cache_init(
 
 
 uint32_t cache_statemachine(cachedef* c, uint64_t* master_cyclecounter); /*returns the current state.*/
-uint32_t cache_write_request(uint64_t byte_addr, uint8_t bytevalue, uint64_t* master_cyclecounter);
+uint32_t cache_write8_request(uint64_t byte_addr, uint8_t value, uint64_t* master_cyclecounter);
+uint32_t cache_write16_request(uint64_t byte_addr, uint16_t value, uint64_t* master_cyclecounter);
+uint32_t cache_write32_request(uint64_t byte_addr, uint32_t value, uint64_t* master_cyclecounter);
+uint32_t cache_write64_request(uint64_t byte_addr, uint64_t value, uint64_t* master_cyclecounter);
 
 
